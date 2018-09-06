@@ -658,7 +658,7 @@ def warpTranslateOverview(panSharpenFilePath, outputdirectory, aoiwkt):
     warpedFilePath = outputdirectory + '/warped.vrt'
     productFootprintWKT = generateWarpFile(outputdirectory, warpedFilePath, aoiwkt, ds)
 
-    scaleParams = generic.getScaleParams(ds, 255)
+    scaleParams = generic.getSimpleScaleParams(ds, 255)
     print scaleParams
     
     print 'Translating to tiff file'
