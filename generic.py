@@ -134,7 +134,7 @@ def getDatasetFootprint(datafile):
 
     return footprint.ExportToWkt()
 
-def getScaleParams(datafile, maxScale = None):
+def getScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
 
     if datafile is None:
         print 'No dataset provided'
@@ -144,12 +144,7 @@ def getScaleParams(datafile, maxScale = None):
     maxBands = -1 * minBands
     scaleParams = []
     exponents = []
-    for band in range(datafile.RasterCount):
-        band += 1
-        
-        # stop at 3rd band
-        if band > 3:
-            break;
+    for band in bandList:
 
         print "[ GETTING BAND ]: ", band
         srcband = datafile.GetRasterBand(band)
@@ -164,7 +159,7 @@ def getScaleParams(datafile, maxScale = None):
         maxValue = stats[1]
         mean = stats[2]
         stddev = stats[3]
-        if(minValue < minBands):
+        if(minValue > 0 and minValue < minBands):
             minBands = minValue
         if(maxValue > maxBands):
             maxBands = maxValue
@@ -193,7 +188,7 @@ def getScaleParams(datafile, maxScale = None):
 
     return scaleParams;
     
-def getSimpleScaleParams(datafile, maxScale = None):
+def getSimpleScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
 
     if datafile is None:
         print 'No dataset provided'
@@ -202,18 +197,14 @@ def getSimpleScaleParams(datafile, maxScale = None):
     minBands = sys.maxint
     maxBands = -1 * minBands
     scaleParams = []
-    for band in range(datafile.RasterCount):
-        band += 1
-        
-        # stop at 3rd band
-        if band > 3:
-            break;
+    for band in bandList:
 
         print "[ GETTING BAND ]: ", band
         srcband = datafile.GetRasterBand(band)
         if srcband is None:
             continue
 
+        print "No data value is " + str(srcband.GetNoDataValue())
         stats = srcband.GetStatistics( True, True )
         if stats is None:
             continue
@@ -225,13 +216,8 @@ def getSimpleScaleParams(datafile, maxScale = None):
         if(maxValue > maxBands):
             maxBands = maxValue
 
-    for band in range(datafile.RasterCount):
-        band += 1
-        
-        # stop at 3rd band
-        if band > 3:
-            break;
-            
+    for band in bandList:
+
         # calculate the min max to stretch to
         dataType = srcband.DataType
         if maxScale is None:

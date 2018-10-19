@@ -27,7 +27,10 @@ def trueColour(argv):
     else:   
         aoiwkt = None
 
-    print gdal.VersionInfo()
+    print "GDAL version " + gdal.VersionInfo()
+    print "Platform name" + platformName
+    print "Product type " + producttype
+    print "AoI WKT " + aoiwkt
 
     if platformName == 'SENTINEL2':
         # find SAFE directory
@@ -79,7 +82,7 @@ def trueColour(argv):
         # now write the output json file
         product = {
             "name": "True colour image",
-            "productType": "COVERAGE",
+            "productType": "COVERAGE", 
             "SRS":"EPSG:4326",
             "envelopCoordinatesWKT": productFootprintWKT,
             "filePath": outputFilePath,
@@ -419,6 +422,7 @@ def trueColour(argv):
         #Find tiff files
         tiffFilesPaths = findFiles(inputDirectory, ("tif", "tiff"))
 
+        panSharpenFilePath = outputDirectory + "/pansharpen.vrt"
         if len(tiffFilesPaths) == 0:
             sys.exit("No TIFF file in the directory " + inputDirectory)
     
@@ -427,11 +431,11 @@ def trueColour(argv):
             PStiffFilePath = tiffFilesPaths[0]
             path, fileName = os.path.split(PStiffFilePath)
             if "_1G_1MC.TIF" or "_PS.TIF" in fileName.upper():
-                #Convert to vrt
-                panSharpenFilePath = PStiffFilePath #outputDirectory + "/pansharpen.vrt"
-                #gdal.Translate(panSharpenFilePath, PStiffFilePath, format = "VRT")
+                # invert bands
+                gdal.Translate(panSharpenFilePath, PStiffFilePath, bandList = [3,2,1], format = "VRT")
             else:
                 sys.exit("Unable to identify file type.")
+            
             
         #Bundle = 1 pan file, 4 MS files - make composite MS image then pansharpen
         elif len(tiffFilesPaths) == 5:
@@ -478,14 +482,20 @@ def trueColour(argv):
                 sys.exit("Error with gdal.BuildVRT")
     
             #Now pansharpen
-            panSharpenFilePath = outputDirectory + "/pansharpen.vrt"
             gdal_pansharpen.gdal_pansharpen(['', panFilePath, colourFilePath, panSharpenFilePath, '-nodata', '0', '-co', 'PHOTOMETRIC=RGB', '-of', 'VRT'])
     
         else:
             sys.exit("Invalid number of files found. " + str(len(tiffFilesPaths)) + " files found in directory " + inputDirectory)
     
 
-        output(panSharpenFilePath, outputDirectory, aoiwkt, start)
+        # mark black pixels as transparent
+        transparentPanSharpenFilePath = outputDirectory + "/pansharpen_transparent.vrt"
+        gdal.BuildVRT(transparentPanSharpenFilePath, panSharpenFilePath, srcNodata = '0', VRTNodata = '0')
+        
+        ds = gdal.Open(transparentPanSharpenFilePath)
+        print "No data value for band 1 " + str(ds.GetRasterBand(1).GetNoDataValue())
+
+        output(transparentPanSharpenFilePath, outputDirectory, aoiwkt, start)
     
         print ("True Colour script finished for Kompsat-2 product(s) at " + inputDirectory)
         totalExecutionTime = time.time()-start
@@ -784,15 +794,16 @@ def trueColour(argv):
         # reproject to 4326
         tempFilePath = outputDirectory + '/temp.tiff';
         outputFilePath = outputDirectory + '/productOutput.tiff'
-        # if analytics we need to do some scaling for contrasts
+        # if analytics we need to do some scaling for contrasts and reshuffle and reduce bands
         if analytic:
-            # reduce bands if needed
+            # reshuffle and reduce bands
             ds = gdal.Translate('temp', ds, format = 'MEM', bandList = [3,2,1])
             print "Analytic product, modifying contrast for visualisation"
             scaleParams = generic.getScaleParams(ds, 255)
             print "Scale params "
             print(scaleParams)
             ds = gdal.Translate('temp', ds, format = 'MEM', scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5])
+        
         ds = gdal.Warp('temp', ds, format = 'GTiff', srcNodata = 0, dstAlpha = True, dstSRS = 'EPSG:4326')
         productFootprintWKT = getFootprintPath(aoiwkt, ds)
         print "FOOTPRINT: " + productFootprintWKT
@@ -1025,32 +1036,29 @@ def mosaic(filePathsArray, fileName, outputDirectory):
     return filePath
 
 def output(imageFilePath, outputDirectory, aoiwkt, start):
+    
     ds = gdal.Open(imageFilePath)
 
     #Reproject and extract footprint
-    warpedFilePath = outputDirectory + "/warped.vrt"
-    beforeWarp = time.time()-start
-    ds = gdal.Warp(warpedFilePath, ds, format = 'VRT', dstSRS = 'EPSG:4326')
-    afterWarp = time.time()-start
-    warpTime = afterWarp-beforeWarp
-    print ("Warp takes %f seconds" % (warpTime))
+    warpedFilePath = outputDirectory + '/warped.vrt'
+    productFootprintWKT = generateWarpFile(outputDirectory, warpedFilePath, aoiwkt, ds)
+    print "FOOTPRINT: " + productFootprintWKT
+    ds = gdal.Open(warpedFilePath)
 
-    productFootprintWKT = generic.getDatasetFootprint(ds)
-    print ("Footprint: " + productFootprintWKT)
-
-    scaleParams = generic.getScaleParams(ds, 255)
+    # expects bands to be in the right order
+    scaleParams = generic.getScaleParams(ds, 255, [1,2,3])
     print ("Scale params: " + str(scaleParams))
 
     #Convert to tiff file with 3 bands only.
     print ("Translating to tiff file.")
     beforeTranslateTime = time.time() - start
-    ds = gdal.Translate("temp", ds, bandList = [1,2,3], scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5], outputType = gdal.GDT_Byte, options = ["PHOTOMETRIC=RGB"], format = "MEM")
+    ds = gdal.Translate("temp", ds, scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5], outputType = gdal.GDT_Byte, options = ["PHOTOMETRIC=RGB"], format = "MEM")
     afterTranslateTime = time.time() - start
     print ("Translate execution time: " + str(afterTranslateTime-beforeTranslateTime))
 
     #Create overlays
     print ("Generate overviews.")
-    generic.executeOverviews(ds)
+    executeOverviews(ds)
 
     print ("Save with overviews.")
     outputFilePath = outputDirectory + "/productOutput.tiff"
