@@ -1,4 +1,4 @@
-import sys, os, json
+import sys, os, json, numpy as np
 
 from osgeo import gdal, osr, ogr
 
@@ -216,6 +216,9 @@ def getSimpleScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
         if(maxValue > maxBands):
             maxBands = maxValue
 
+        print "[ STATS ] =  Minimum=%.3f, Maximum=%.3f, Mean=%.3f, StdDev=%.3f" % ( \
+            stats[0], stats[1], stats[2], stats[3] )
+            
     for band in bandList:
 
         # calculate the min max to stretch to
@@ -229,7 +232,46 @@ def getSimpleScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
                 maxScale = 255
         
         # do scaling on a band basis
-        scaleParams.append([minValue, maxValue, 0, maxScale])
+        scaleParams.append([minBands, maxBands, 0, maxScale])
 
     return scaleParams;
 
+def getCumulativeCountScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
+
+    if datafile is None:
+        print 'No dataset provided'
+        return None
+
+    scaleParams = []
+    exponents = []
+    for band in bandList:
+
+        print "[ GETTING BAND ]: ", band
+        srcband = datafile.GetRasterBand(band)
+        if srcband is None:
+            continue
+
+        arr = srcband.ReadAsArray()
+        
+        # assumes 0 is the no data value
+        minValue = np.percentile(arr[arr != 0], 2)
+        maxValue = np.percentile(arr[arr != 0], 98)
+
+        # calculate the min max to stretch to
+        dataType = srcband.DataType
+        if maxScale is None:
+            if dataType == 1:
+                maxScale = 255
+            elif dataType == 2:
+                maxScale = 65535
+            else:
+                maxScale = 255
+                
+        # do scaling on a band basis
+        scaleParams.append([minValue, maxValue, 1, maxScale])
+        exponents.append(0.5)
+
+    print "Scale value is " + str(scaleParams)
+
+    return scaleParams;
+    

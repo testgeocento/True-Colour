@@ -125,12 +125,12 @@ def trueColour(argv):
         warpedFilePath = outputDirectory + '/warped.vrt'
         productFootprintWKT = generateWarpFile(outputDirectory, warpedFilePath, aoiwkt, ds)
 
-        scaleParams = generic.getScaleParams(ds, 255)
+        scaleParams = generic.getCumulativeCountScaleParams(ds, 255)
         print scaleParams
         
         print 'Translating to tiff file'
         
-        ps = gdal.Translate("temp", warpedFilePath, scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5], outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'MEM')
+        ps = gdal.Translate("temp", warpedFilePath, scaleParams = scaleParams, outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'MEM')
         
         print 'Generate overviews'
         executeOverviews(ps)
@@ -185,12 +185,12 @@ def trueColour(argv):
         warpedFilePath = outputDirectory + '/warped.vrt'
         productFootprintWKT = generateWarpFile(outputDirectory, warpedFilePath, aoiwkt, ds)
 
-        scaleParams = generic.getScaleParams(ds, 255)
+        scaleParams = generic.getCumulativeCountScaleParams(ds, 255)
         print scaleParams
         
         print 'Translating to tiff file'
         
-        ps = gdal.Translate("temp", warpedFilePath, scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5], outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'MEM')
+        ps = gdal.Translate("temp", warpedFilePath, scaleParams = scaleParams, outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'MEM')
         
         print 'Generate overviews'
         executeOverviews(ps)
@@ -334,7 +334,7 @@ def trueColour(argv):
         ds = gdal.Open(warpedFilePath)
 
         # stretch to bytes
-        scaleParams = generic.getScaleParams(ds, 255)
+        scaleParams = generic.getCumulativeCountScaleParams(ds, 255)
         print "Scale params "
         print(scaleParams)
         outputFilePath = outputDirectory + '/productOutput.tiff'
@@ -352,9 +352,6 @@ def trueColour(argv):
         }
 
         writeOutput(outputDirectory, "True colour generation using geocento process", [product])
-
-        print "Now cleaning up"
-        os.remove(tempFilePath)
 
         print "True Colour script finished for WorldView-2 product(s) at " + inputDirectory
 
@@ -386,14 +383,18 @@ def trueColour(argv):
             # pan sharpen the image
             tiffFile = panSharpen(outputDirectory, [panFile], [bandFile])
 
-        ds = gdal.Open(tiffFile)
+        # mark black pixels as transparent
+        transparentPanSharpenFilePath = outputDirectory + "/pansharpen_transparent.vrt"
+        gdal.BuildVRT(transparentPanSharpenFilePath, tiffFile, srcNodata = '0', VRTNodata = '0')
+        
+        ds = gdal.Open(transparentPanSharpenFilePath) 
         warpedFilePath = outputDirectory + '/warped.vrt'
         productFootprintWKT = generateWarpFile(outputDirectory, warpedFilePath, aoiwkt, ds)
         print "FOOTPRINT: " + productFootprintWKT
         ds = gdal.Open(warpedFilePath)
 
         # stretch to bytes
-        scaleParams = generic.getScaleParams(ds, 255)
+        scaleParams = generic.getCumulativeCountScaleParams(ds, 255)
         print "Scale params "
         print(scaleParams)
         outputFilePath = outputDirectory + '/productOutput.tiff'
@@ -653,127 +654,6 @@ def trueColour(argv):
         executiontime = time.time()-start
         print("Total execution time: " + str(executiontime))
 
-    elif platformName == '_KOMPSAT-2':
-        # get the tif files
-        tiffFiles = findFiles(inputDirectory, 'tif')
-
-        if len(tiffFiles) == 0:
-            sys.exit("Missing TIFF file in directory")
-
-        # create vrt for bands
-        panSharpenFilePath = outputDirectory + '/pansharpen.vrt';
-
-        # check if bundle type of product
-        if len(tiffFiles) == 2:
-            if "_PAN/" in tiffFiles[0]:
-                panFile = tiffFiles[0]
-                bandFile = tiffFiles[1]
-            else:
-                panFile = tiffFiles[1]
-                bandFile = tiffFiles[0]
-            gdal_pansharpen.gdal_pansharpen(['', panFile, bandFile, panSharpenFilePath, '-nodata', '0', '-co', 'PHOTOMETRIC=RGB', '-of', 'VRT'])
-        else:
-            gdal.Translate(panSharpenFilePath, tiffFiles[0], bandList = [3,2,1], format = 'VRT')
-
-        # warp and stretch the values
-        ds = gdal.Open(panSharpenFilePath)
-        warpedFilePath = outputDirectory + '/warped.vrt'
-        productFootprintWKT = generateWarpFile(outputDirectory, warpedFilePath, aoiwkt, ds)
-
-        scaleParams = generic.getScaleParams(ds, 255)
-        print scaleParams
-        
-        print 'Translating to tiff file'
-        
-        tempFilePath = outputDirectory + '/temp.tiff'
-        ps = gdal.Translate(tempFilePath, warpedFilePath, scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5], outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'GTiff')
-        
-        print 'Generate overviews'
-        executeOverviews(ps)
-        
-        print 'Save with overviews'
-        outputFilePath = outputDirectory + '/productOutput.tiff'
-        gdal.Translate(outputFilePath, ps, format = 'GTiff')
-
-        # now write the output json file
-        product = {
-            "name": "True colour image",
-            "productType": "COVERAGE",
-            "SRS":"EPSG:4326",
-            "envelopCoordinatesWKT": productFootprintWKT,
-            "filePath": outputFilePath,
-            "description": "True colour image from Kompsat-2 platform"
-        }
-
-        writeOutput(outputDirectory, "True colour generation using geocento process", [product])
-
-        print "Now cleaning up"
-        #os.remove(tempFilePath)
-
-        print "True Colour script finished for kompsat-2 product(s) at " + inputDirectory
-
-    elif platformName == '_KOMPSAT-3' or platformName == '_KOMPSAT-3A':
-        # get the tif files
-        tiffFiles = findFiles(inputDirectory, 'tif')
-
-        if len(tiffFiles) == 0:
-            sys.exit("Missing TIFF file in directory")
-
-        #/ check if bundle type of product
-        if len(tiffFiles) == 2:
-            if "_PAN/" in tiffFiles[0]:
-                panFile = tiffFiles[0]
-                bandFile = tiffFiles[1]
-            else:
-                panFile = tiffFiles[1]
-                bandFile = tiffFiles[0]
-        elif len(tiffFiles) == 4:
-            # pan sharpened bands
-            bandFiles = sorted(tiffFiles, reverse = True)
-            # remove the NIR band
-            del(bandFiles[1])
-            # merge all files into one
-            # create vrt for bands
-            bandsFilePath = outputDirectory + '/spectral.vrt'
-            gdal.BuildVRT(bandsFilePath, bandFiles, separate = True)
-            ds = gdal.Open(bandsFilePath)
-        else:
-            tiffFile = tiffFiles[0]
-
-        warpedFilePath = outputDirectory + '/warped.vrt'
-        #ds = gdal.Warp(warpedFilePath, bandsFilePath, format = 'VRT', dstSRS = 'EPSG:4326')
-        productFootprintWKT = generateWarpFile(outputDirectory, warpedFilePath, aoiwkt, ds)
-        #productFootprintWKT = aoiwkt
-
-        scaleParams = generic.getScaleParams(ds, 255)
-        print scaleParams
-        
-        print 'Translating to tiff file'
-        
-        tempFilePath = outputDirectory + '/temp.tiff'
-        ps = gdal.Translate(tempFilePath, warpedFilePath, scaleParams = scaleParams, outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'GTiff')
-        
-        print 'Generate overviews'
-        executeOverviews(ps)
-        
-        print 'Save with overviews'
-        outputFilePath = outputDirectory + '/productOutput.tiff'
-        gdal.Translate(outputFilePath, ps, format = 'GTiff')
-
-        # now write the output json file
-        product = {
-            "name": "True colour image",
-            "productType": "COVERAGE",
-            "SRS":"EPSG:4326",
-            "envelopCoordinatesWKT": productFootprintWKT,
-            "filePath": outputFilePath,
-            "description": "True colour image from Kompsat-3 platform"
-        }
-
-        writeOutput(outputDirectory, "True colour generation using geocento process", [product])
-
-        print "True Colour script finished for kompsat-3 product(s) at " + inputDirectory
-
     elif platformName == 'PLANETSCOPE':
         # get the tif files
         tifFiles = findFiles(inputDirectory, 'tif')
@@ -798,15 +678,18 @@ def trueColour(argv):
         if analytic:
             # reshuffle and reduce bands
             ds = gdal.Translate('temp', ds, format = 'MEM', bandList = [3,2,1])
-            print "Analytic product, modifying contrast for visualisation"
-            scaleParams = generic.getScaleParams(ds, 255)
-            print "Scale params "
-            print(scaleParams)
-            ds = gdal.Translate('temp', ds, format = 'MEM', scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5])
         
-        ds = gdal.Warp('temp', ds, format = 'GTiff', srcNodata = 0, dstAlpha = True, dstSRS = 'EPSG:4326')
+        ds = gdal.Warp('tempwarp', ds, format = 'GTiff', srcNodata = 0, dstAlpha = True, dstSRS = 'EPSG:4326')
         productFootprintWKT = getFootprintPath(aoiwkt, ds)
         print "FOOTPRINT: " + productFootprintWKT
+
+        if analytic:
+            print "Analytic product, modifying contrast for visualisation"
+            scaleParams = generic.getCumulativeCountScaleParams(ds, 255)
+            print "Scale params "
+            print(scaleParams)
+            ds = gdal.Translate('temp', ds, format = 'MEM', scaleParams = scaleParams)
+
         ds = gdal.Translate(tempFilePath, ds, outputType = gdal.GDT_Byte, format = 'GTiff')
         executeOverviews(ds)
         ds = gdal.Translate(outputFilePath, ds, format = 'GTiff')
@@ -1046,13 +929,13 @@ def output(imageFilePath, outputDirectory, aoiwkt, start):
     ds = gdal.Open(warpedFilePath)
 
     # expects bands to be in the right order
-    scaleParams = generic.getScaleParams(ds, 255, [1,2,3])
+    scaleParams = generic.getCumulativeCountScaleParams(ds, 255, [1,2,3])
     print ("Scale params: " + str(scaleParams))
 
     #Convert to tiff file with 3 bands only.
     print ("Translating to tiff file.")
     beforeTranslateTime = time.time() - start
-    ds = gdal.Translate("temp", ds, scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5], outputType = gdal.GDT_Byte, options = ["PHOTOMETRIC=RGB"], format = "MEM")
+    ds = gdal.Translate("temp", ds, scaleParams = scaleParams, outputType = gdal.GDT_Byte, options = ["PHOTOMETRIC=RGB"], format = "MEM")
     afterTranslateTime = time.time() - start
     print ("Translate execution time: " + str(afterTranslateTime-beforeTranslateTime))
 
