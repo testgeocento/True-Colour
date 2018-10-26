@@ -178,49 +178,10 @@ def trueColour(argv):
 
         panSharpenFilePath = outputDirectory + '/pansharpen.vrt';
 
-        gdal_pansharpen.gdal_pansharpen(['', band8FilePath, bandsFilePath, panSharpenFilePath, '-nodata', '0', '-co', 'PHOTOMETRIC=RGB', '-of', 'VRT'])
-
-        # mark black pixels as transparent
-        transparentPanSharpenFilePath = outputDirectory + "/pansharpen_transparent.vrt"
-        print("Now creating transparent dataset with no data value @ " + transparentPanSharpenFilePath)
-        gdal.BuildVRT(transparentPanSharpenFilePath, panSharpenFilePath, srcNodata = '0', VRTNodata = '0')
+        gdal_pansharpen.gdal_pansharpen(['', band8FilePath, bandsFilePath, panSharpenFilePath, '-b', '1', '-b', '2', '-b', '3', '-co', 'PHOTOMETRIC=RGB', '-of', 'VRT'])
 
         start = time.time()
-        output(transparentPanSharpenFilePath, outputDirectory, aoiwkt, start)
-        
-        if False:
-            # stretch the values
-            ds = gdal.Open(panSharpenFilePath)
-    
-            warpedFilePath = outputDirectory + '/warped.vrt'
-            productFootprintWKT = generateWarpFile(outputDirectory, warpedFilePath, aoiwkt, ds)
-    
-            scaleParams = generic.getCumulativeCountScaleParams(ds, 255)
-            print scaleParams
-            
-            print 'Translating to tiff file'
-            
-            ps = gdal.Translate("temp", warpedFilePath, scaleParams = scaleParams, outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'MEM')
-            
-            print 'Generate overviews'
-            executeOverviews(ps)
-            
-            print 'Save with overviews'
-            outputFilePath = outputDirectory + '/productOutput.tiff'
-            gdal.Translate(outputFilePath, ps, format = 'GTiff')
-    
-            # now write the output json file
-            product = {
-                "name": "True colour image",
-                "productType": "COVERAGE",
-                "SRS":"EPSG:4326",
-                "envelopCoordinatesWKT": productFootprintWKT,
-                "filePath": outputFilePath,
-                "description": "True colour image from Landsat 7 platform"
-            }
-            writeOutput(outputDirectory, "True colour generation using geocento process", [product])
-    
-            print "True Colour script finished for LANDSAT7 STANDARD product(s) at " + inputDirectory
+        output(panSharpenFilePath, outputDirectory, aoiwkt, start)
 
     elif platformName == 'TRIPPLESAT':
         # get the tif files
@@ -727,8 +688,52 @@ def trueColour(argv):
 
         print "True Colour script finished for TRIPPLE SAT product(s) at " + inputDirectory
 
-    elif platformName == 'SENTINEL1':
-        pass
+    elif platformName == 'EROS-B':
+        # get the tif files
+        tiffFiles = findFiles(inputDirectory, ('tif', 'tiff'))
+
+        if len(tiffFiles) == 0:
+            sys.exit("Missing TIFF file in directory")
+
+        #1A or 1B product
+        productLevel1B = '.1B.' in tiffFiles[0]
+        #stereo product
+        stereo = len(tiffFiles) == 2
+        
+        if stereo:
+            pass
+        else:
+            tiffFile = tiffFiles[0]
+            ds = gdal.Open(tiffFile)
+
+            footprintGeometryWKT = generateWarpFile()
+    
+            tempFilePath = outputDirectory + '/temp.tiff';
+            scaleParams = generic.getCumulativeCountScaleParams(warpedDs, 255, [1])
+            ds = gdal.Translate(tempFilePath, warpedDs, outputType = gdal.GDT_Byte, scaleParams = scaleParams, outputType = gdal.GDT_Byte, noData = 0, format = 'GTiff')
+            executeOverviews(ds)
+            outputFilePath = outputDirectory + '/productOutput.tiff'
+            ds = gdal.Translate(outputFilePath, ds, format = 'GTiff')
+    
+            # a bit of clean up
+            os.remove(tempFilePath)
+    
+            if intersectionWKT is None:
+                productFootprintWKT = footprintGeometryWKT
+            else:
+                productFootprintWKT = intersectionWKT
+    
+            # now write the output json file
+            product = {
+                "name": "True Colour",
+                "productType": "COVERAGE",
+                "SRS":"EPSG:4326",
+                "envelopCoordinatesWKT": productFootprintWKT,
+                "filePath": outputFilePath,
+                "description": "True colour product for display"
+            }
+            writeOutput(outputDirectory, "True colour image using geocento process", [product])
+
     else:
         sys.exit("Unknown platform " + platformName)
         
@@ -937,7 +942,7 @@ def mosaic(filePathsArray, fileName, outputDirectory):
         filePath = False
     return filePath
 
-def output(imageFilePath, outputDirectory, aoiwkt, start):
+def output(imageFilePath, outputDirectory, aoiwkt, start, bands = [1,2,3]):
     
     ds = gdal.Open(imageFilePath)
 
@@ -964,7 +969,7 @@ def output(imageFilePath, outputDirectory, aoiwkt, start):
 
     start = time.time()
     # scale params
-    scaleParams = generic.getCumulativeCountScaleParams(ds, 255, [1,2,3])
+    scaleParams = generic.getCumulativeCountScaleParams(ds, 255, bands)
     print ("Scale params: " + str(scaleParams))
     print ("Scale calculation time: " + str(time.time() - start))
     
