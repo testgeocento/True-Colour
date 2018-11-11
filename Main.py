@@ -2,7 +2,7 @@
 
 """ for python 2 and python 3 execution exec(open("./path/to/script.py").read(), globals()) """
 
-import sys, os, json
+import sys, os, json, re
 
 from osgeo import gdal, osr, ogr
 
@@ -283,11 +283,11 @@ def trueColour(argv):
         ds = gdal.Open(warpedFilePath)
 
         # stretch to bytes
-        scaleParams = generic.getScaleParams(ds, 255)
+        [scaleParams, exponents] = generic.getScaleParams(ds, 255)
         print "Scale params "
         print(scaleParams)
         outputFilePath = outputDirectory + '/productOutput.tiff'
-        ds = gdal.Translate(outputFilePath, ds, bandList = [1,2,3], scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5], outputType = gdal.GDT_Byte, noData = 0, format = 'GTiff')
+        ds = gdal.Translate(outputFilePath, ds, bandList = [1,2,3], scaleParams = scaleParams, exponents = exponents, outputType = gdal.GDT_Byte, noData = 0, format = 'GTiff')
         executeOverviews(ds)
 
         # now write the output json file
@@ -304,6 +304,130 @@ def trueColour(argv):
 
         print "True Colour script finished for PLEIADES product(s) at " + inputDirectory
 
+    elif platformName == 'SPOT6_7':
+        
+        start = time.time()
+        
+        #gdal.UseExceptions()
+        driver = gdal.GetDriverByName( 'DIMAP')
+        driver.Register()
+        
+        # check if bundle or pansharpened
+        # look for DIMAP files
+        dimapFiles = findFilesRegexp(inputDirectory, '(^DIM_SPOT[6,7]_).+(.XML$)')
+        imagePath = None
+        if len(dimapFiles) == 1:
+            imagePath = dimapFiles[0]
+        elif len(dimapFiles) == 2:
+            msFilePath = panFilePath = None
+            if re.match('(^DIM_SPOT[6,7]_P).+(.XML$)', os.path.basename(dimapFiles[0])):
+                panFilePath = dimapFiles[0]
+                msFilePath = dimapFiles[1]
+            else:
+                panFilePath = dimapFiles[1]
+                msFilePath = dimapFiles[0]
+            print("Pan file " + panFilePath + " and MS file " + msFilePath)
+            
+            # check if rpc
+            if True:
+                # try with rpcs
+                msFilePathRpc = outputDirectory + "/msfile_rpc.vrt"
+                ds = generic.applyRPCs(msFilePath, msFilePathRpc)
+                msFilePath = msFilePathRpc
+                # try with rpcs
+                panFilePathRpc = outputDirectory + "/panfile_rpc.vrt"
+                ds = generic.applyRPCs(panFilePath, panFilePathRpc)
+                panFilePath = panFilePathRpc
+
+            imagePath = outputDirectory + "/pansharpen.vrt"
+            gdal_pansharpen.gdal_pansharpen(['', panFilePath, msFilePath, imagePath, '-co', 'PHOTOMETRIC=RGB', '-of', 'VRT'])
+        else:
+            sys.exit("Missing image files in directory " + inputDirectory)
+
+        if False:
+            # try with rpcs
+            imageFilePathRpc = outputDirectory + "/pansharpen_rpc.vrt"
+            ds = generic.applyRPCs(imagePath, imageFilePathRpc)
+            imagePath = imageFilePathRpc
+
+        # mark black pixels as transparent
+        transparentPanSharpenFilePath = outputDirectory + "/pansharpen_transparent.vrt"
+        print("Now creating transparent dataset with no data value @ " + transparentPanSharpenFilePath)
+        gdal.BuildVRT(transparentPanSharpenFilePath, imagePath, srcNodata = '0', VRTNodata = '0')
+
+        output(transparentPanSharpenFilePath, outputDirectory, aoiwkt, start)
+        
+        print ("True Colour script finished for SPOT product(s) at " + inputDirectory)
+        executionTime = time.time() - start
+        print(executionTime)
+
+    elif platformName == 'SPOT6_7_':
+        
+        start = time.time()
+        #Look for JPEG2000 files and then look for TIFF files
+        jp2FilePaths = findFiles(inputDirectory, "jp2")
+        tiffFilePaths = findFiles(inputDirectory, ("tiff", "tif"))
+        #Create another array containing the filepaths regardless of file type
+        if len(jp2FilePaths) > 0:
+            imageFilePaths = jp2FilePaths
+        elif len(tiffFilePaths) > 0:
+            imageFilePaths = tiffFilePaths #Transfer all filepaths to imageFilePaths array no matter what type of file they are
+        else: #It couldn't find jp2 or tiff files
+            sys.exit("Missing image files in directory " + inputDirectory)
+    
+        panTileFilePaths = []
+        msTileFilePaths = []
+        ps4bandTileFilePaths = []
+        psRGBTileFilePaths = []
+        psRGNTileFilePaths = []
+    
+        #Label the files
+        for filePath in imageFilePaths:
+            path, fileName = os.path.split(filePath) #Splits filepaths in imageFilePaths array into path and filename
+            if "_P_" in fileName:
+                print ("Image is panchromatic.")
+                panTileFilePaths.append(filePath)
+            elif "_MS_" in fileName:
+                print ("Image is 4 bands multispectral.")
+                msTileFilePaths.append(filePath)
+            elif "_PMS_" in fileName:
+                print ("Image is 4 bands pansharpened.")
+                ps4bandTileFilePaths.append(filePath)
+            elif "_PMS-N_" in fileName:
+                print ("Image is 3 bands pansharpened (B, G, R bands).")
+                psRGBTileFilePaths.append(filePath)
+            elif "_PMS-X_" in fileName:
+                print ("Image is 3 bands pansharpened (G, R, NIR bands, false colour).")
+                psRGNTileFilePaths.append(filePath)
+    
+        # Check if images are tiled.
+        panImageFilePath = mosaic(panTileFilePaths, "/panmosaic.vrt", outputDirectory)
+        msImageFilePath = mosaic(msTileFilePaths, "/msmosaic.vrt", outputDirectory)
+        ps4bandImageFilePath = mosaic(ps4bandTileFilePaths, "/ps4bandmosaic.vrt", outputDirectory)
+        psRGBImageFilePath = mosaic(psRGBTileFilePaths, "/psRGBmosaic.vrt", outputDirectory)
+        psRGNImageFilePath = mosaic(psRGNTileFilePaths, "/psRGNmosaic.vrt", outputDirectory)
+    
+        finalImageFilePath = None
+        if panImageFilePath and msImageFilePath: #If they both exist then it's a bundle.
+            finalImageFilePath = outputDirectory + "/pansharpen.vrt"
+            gdal_pansharpen.gdal_pansharpen(['', panImageFilePath, msImageFilePath, finalImageFilePath, '-nodata', '0', '-co', 'PHOTOMETRIC=RGB', '-of', 'VRT'])
+        elif panImageFilePath: #It's just a pan file
+            finalImageFilePath = panImageFilePath
+        elif msImageFilePath: #It's just an MS file
+            finalImageFilePath = msImageFilePath
+        elif ps4bandImageFilePath:
+            finalImageFilePath = ps4bandImageFilePath
+        elif psRGBImageFilePath:
+            finalImageFilePath = psRGBImageFilePath
+        elif psRGNImageFilePath:
+            finalImageFilePath = psRGNImageFilePath
+    
+        output(finalImageFilePath, outputDirectory, aoiwkt, start)
+        
+        print ("True Colour script finished for SPOT product(s) at " + inputDirectory)
+        executionTime = time.time() - start
+        print(executionTime)
+       
     elif platformName == 'WORLDVIEW-2':
         # get the tif files
         tiffFiles = findFiles(inputDirectory, 'tif')
@@ -380,7 +504,7 @@ def trueColour(argv):
             # pan sharpen the image
             print('Pan sharpening image')
             tiffFile = outputDirectory + "/pansharpen.vrt"
-            gdal_pansharpen.gdal_pansharpen(['', panFile, bandFile, tiffFile, '-b', '1', '-b', '2', '-b', '3', '-of', 'VRT'])
+            gdal_pansharpen.gdal_pansharpen(['', panFile, bandFile, tiffFile, '-b', '3', '-b', '2', '-b', '1', '-of', 'VRT'])
             #tiffFile = panSharpen(outputDirectory, [panFile], [bandFile])
         else:
             sys.exit("Unable to identify file type.")
@@ -704,35 +828,8 @@ def trueColour(argv):
             pass
         else:
             tiffFile = tiffFiles[0]
-            ds = gdal.Open(tiffFile)
 
-            footprintGeometryWKT = generateWarpFile()
-    
-            tempFilePath = outputDirectory + '/temp.tiff';
-            scaleParams = generic.getCumulativeCountScaleParams(warpedDs, 255, [1])
-            ds = gdal.Translate(tempFilePath, warpedDs, outputType = gdal.GDT_Byte, scaleParams = scaleParams, outputType = gdal.GDT_Byte, noData = 0, format = 'GTiff')
-            executeOverviews(ds)
-            outputFilePath = outputDirectory + '/productOutput.tiff'
-            ds = gdal.Translate(outputFilePath, ds, format = 'GTiff')
-    
-            # a bit of clean up
-            os.remove(tempFilePath)
-    
-            if intersectionWKT is None:
-                productFootprintWKT = footprintGeometryWKT
-            else:
-                productFootprintWKT = intersectionWKT
-    
-            # now write the output json file
-            product = {
-                "name": "True Colour",
-                "productType": "COVERAGE",
-                "SRS":"EPSG:4326",
-                "envelopCoordinatesWKT": productFootprintWKT,
-                "filePath": outputFilePath,
-                "description": "True colour product for display"
-            }
-            writeOutput(outputDirectory, "True colour image using geocento process", [product])
+            output(tiffFile, outputDirectory, None, None, [1])
 
     else:
         sys.exit("Unknown platform " + platformName)
@@ -775,6 +872,17 @@ def findFiles(directory, extension):
                 foundFiles.append(os.path.join(dirpath, name))
     return foundFiles
 
+def findFilesRegexp(directory, regexp):
+    print("scanning directory " + directory + " for files with regex " + str(regexp))
+    foundFiles = []
+    for dirpath, dirnames, files in os.walk(directory):
+        for name in files:
+            print("file " + name)
+            if re.match(regexp, name):
+                print("Adding file " + name + " at " + dirpath)
+                foundFiles.append(os.path.join(dirpath, name))
+    return foundFiles
+
 def findDirectory(directory, substring):
     print "scanning directory " + directory + " for directories with pattern " + str(substring)
     foundFiles = []
@@ -792,7 +900,7 @@ def warpTranslateOverview(panSharpenFilePath, outputDirectory, aoiwkt):
     warpedFilePath = outputDirectory + '/warped.vrt'
     productFootprintWKT = generateWarpFile(outputDirectory, warpedFilePath, aoiwkt, ds)
 
-    scaleParams = generic.getScaleParams(ds, 255)
+    [scaleParams, exponents] = generic.getScaleParams(ds, 255)
     print scaleParams
 
     print 'Translating to tiff file'
@@ -804,7 +912,7 @@ def warpTranslateOverview(panSharpenFilePath, outputDirectory, aoiwkt):
     if localOperation:
         ps = gdal.Translate(tempFile, warpedFilePath, scaleParams = scaleParams, outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'GTIFF')
     else:
-        ps = gdal.Translate("temp", warpedFilePath, scaleParams = scaleParams, exponents = [0.5, 0.5, 0.5], outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'MEM')
+        ps = gdal.Translate("temp", warpedFilePath, scaleParams = scaleParams, exponents = exponents, outputType = gdal.GDT_Byte, options = ['PHOTOMETRIC=RGB'], format = 'MEM')
     
     print 'Generate overviews'
     executeOverviews(ps)
@@ -942,7 +1050,10 @@ def mosaic(filePathsArray, fileName, outputDirectory):
         filePath = False
     return filePath
 
-def output(imageFilePath, outputDirectory, aoiwkt, start, bands = [1,2,3]):
+def output(imageFilePath, outputDirectory, aoiwkt, start = None, bands = [1,2,3], transparent = 0, scaleMethod = 'cumulative'):
+    
+    if start is None:
+        start = time.time()
     
     ds = gdal.Open(imageFilePath)
 
@@ -969,12 +1080,18 @@ def output(imageFilePath, outputDirectory, aoiwkt, start, bands = [1,2,3]):
 
     start = time.time()
     # scale params
-    scaleParams = generic.getCumulativeCountScaleParams(ds, 255, bands)
+    scaleParams = None
+    exponent = None
+    if scaleMethod = 'cumulative':
+        [scaleParams, exponent] = generic.getCumulativeCountScaleParams(ds, 255, bands)
+    elif scaleMethod = 'minmax':
+        [scaleParams, exponent] = generic.getScaleParams(ds, 255, bands)
+        
     print ("Scale params: " + str(scaleParams))
     print ("Scale calculation time: " + str(time.time() - start))
     
     start = time.time()
-    ds = gdal.Translate("temp", ds, scaleParams = scaleParams, outputType = gdal.GDT_Byte, noData = 0, options = ["PHOTOMETRIC=RGB"], format = "MEM")
+    ds = gdal.Translate("temp", ds, scaleParams = scaleParams, exponent = exponent, outputType = gdal.GDT_Byte, noData = 0, options = ["PHOTOMETRIC=RGB"], format = "MEM", callback=gdal.TermProgress)
     print ("Translate execution time: " + str(time.time() - start))
 
     #Create overlays
@@ -983,7 +1100,7 @@ def output(imageFilePath, outputDirectory, aoiwkt, start, bands = [1,2,3]):
 
     print ("Save with overviews.")
     outputFilePath = outputDirectory + "/productOutput.tiff"
-    gdal.Translate(outputFilePath, ds, format = 'GTiff')
+    gdal.Translate(outputFilePath, ds, format = 'GTiff', callback=gdal.TermProgress)
 
     # now write the output json file, for EI Neo
     product = {

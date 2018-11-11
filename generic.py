@@ -38,7 +38,7 @@ def createCutline(directory, intersectionWKT):
 def executeOverviews(ds):
     # TODO - calculate based on the size of the image
     overviewList = [2, 4, 8, 16, 32]
-    ds.BuildOverviews( "NEAREST", overviewList)
+    ds.BuildOverviews( "CUBIC", overviewList)
 
 def writeOutput(directory, message, products):
     outputValues = {
@@ -133,6 +133,11 @@ def getDatasetFootprint(datafile):
         print "Footprint geometry reprojected " + footprint.ExportToWkt()
 
     return footprint.ExportToWkt()
+    
+# apply rpcs and return VRT file
+def applyRPCs(inputFilePath, outputFilePath):
+    ds = gdal.Warp(outputFilePath, inputFilePath, format = 'VRT', rpc = True)
+    return ds
 
 def getScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
 
@@ -186,7 +191,7 @@ def getScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
 
     print "Scale value is " + str(scaleParams)
 
-    return scaleParams;
+    return [scaleParams, exponent];
     
 def getSimpleScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
 
@@ -197,6 +202,7 @@ def getSimpleScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
     minBands = sys.maxint
     maxBands = -1 * minBands
     scaleParams = []
+    exponents = []
     for band in bandList:
 
         print "[ GETTING BAND ]: ", band
@@ -234,7 +240,9 @@ def getSimpleScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
         # do scaling on a band basis
         scaleParams.append([minBands, maxBands, 0, maxScale])
 
-    return scaleParams;
+        exponents.append(0.5)
+
+    return [scaleParams, exponents];
 
 def getCumulativeCountScaleParams(datafile, maxScale = None, bandList = [1,2,3]):
 
@@ -273,5 +281,5 @@ def getCumulativeCountScaleParams(datafile, maxScale = None, bandList = [1,2,3])
 
     print "Scale value is " + str(scaleParams)
 
-    return scaleParams;
+    return [scaleParams, None];
     
